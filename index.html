@@ -897,28 +897,39 @@ function handleFileSelect(file) {
 }
 
 function parseAnaliseSheet(rows) {
-  // Structure: 6 faixas per loja block
-  // Meta: cols 16-22 (0-indexed), Real: 24-30, Res: 33-40
-  const FAIXAS = ['00:00 A 04:00','04:00 A 08:00','08:00 A 12:00','12:00 A 16:00','16:00 A 20:00','20:00 A 00:00'];
+  // Real structure (0-indexed columns):
+  // Loja header row: col[15]=loja_num, col[16]=loja_num, col[40]=regional
+  // Faixa data row:  col[15]=loja_num, col[16]=faixa_str, col[17-22]=meta s1-s5+total
+  //                  col[25-30]=real s1-s5+total, col[34-39]=res s1-s5+total, col[40]=regional
+  const FAIXAS_SET = new Set(['00:00 A 04:00','04:00 A 08:00','08:00 A 12:00','12:00 A 16:00','16:00 A 20:00','20:00 A 00:00']);
   const result = [];
-  let faixaIdx = 0;
   let currentLoja = null, currentRegional = null;
 
   for(let i=0; i<rows.length; i++) {
     const row = rows[i];
     if(!row) continue;
-    const lojaVal = row[16];
-    if(lojaVal && !isNaN(Number(lojaVal)) && Number(lojaVal)>=200 && Number(lojaVal)<=300) {
-      currentLoja = Number(lojaVal);
+
+    const col15 = row[15];
+    const col16 = row[16];
+
+    // Detect loja header row: col15 is a number 200-300 AND col16 is the same number
+    if(col15 && col16 && !isNaN(Number(col15)) && Number(col15)>=200 && Number(col15)<=300
+       && String(col15).trim() === String(col16).trim()) {
+      currentLoja = Number(col15);
       currentRegional = row[40] || currentRegional;
-      faixaIdx = 0;
+      continue; // skip this header row, don't add as faixa
     }
-    if(currentLoja && faixaIdx<6) {
-      const toN = v => (v!=null&&!isNaN(Number(v))) ? Number(v) : 0;
+
+    // Detect faixa data row: col16 is a known faixa string
+    const faixaStr = col16 ? String(col16).trim() : '';
+    if(currentLoja && FAIXAS_SET.has(faixaStr)) {
+      const toN = v => (v!=null && v!=='' && !isNaN(Number(v))) ? Number(v) : 0;
+      // Update regional if available on this row
+      if(row[40]) currentRegional = row[40];
       result.push({
         loja: currentLoja,
         regional: (currentRegional||'').toString().trim()||'SEM REGIONAL',
-        faixa: FAIXAS[faixaIdx],
+        faixa: faixaStr,
         meta_sem1: toN(row[17]), meta_sem2: toN(row[18]), meta_sem3: toN(row[19]),
         meta_sem4: toN(row[20]), meta_sem5: toN(row[21]), meta_total: toN(row[22]),
         real_sem1: toN(row[25]), real_sem2: toN(row[26]), real_sem3: toN(row[27]),
@@ -926,7 +937,6 @@ function parseAnaliseSheet(rows) {
         res_sem1:  toN(row[34]), res_sem2:  toN(row[35]), res_sem3:  toN(row[36]),
         res_sem4:  toN(row[37]), res_sem5:  toN(row[38]), res_total:  toN(row[39]),
       });
-      faixaIdx++;
     }
   }
   return result;
@@ -1082,7 +1092,13 @@ function generatePDF() {
     });
   });
 
-  const fname = `energia_${selected.join('-').replace(/ /g,'_')}_${new Date().toISOString().slice(0,10)}.pdf`;
+  // Build filename: e.g. "Regional 7 - S2 - Mar 26.pdf" or "Regional 1, Regional 7 - S2 - Mar 26.pdf"
+  const months = ['Jan','Fev','Mar','Abr','Mai','Jun','Jul','Ago','Set','Out','Nov','Dez'];
+  const now = new Date();
+  const mesAno = months[now.getMonth()] + ' ' + String(now.getFullYear()).slice(2);
+  const semLabelFile = state.semana === 'all' ? 'Todas' : state.semana === 'total' ? 'Total' : 'S' + state.semana;
+  const regLabel = selected.map(r => r.replace('REGIONAL ', 'Regional ')).join(', ');
+  const fname = `${regLabel} - ${semLabelFile} - ${mesAno}.pdf`;
   doc.save(fname);
   closeModal('pdfModal');
   showToast(`✓ PDF gerado: ${selected.length} regional(is)`,'good');
